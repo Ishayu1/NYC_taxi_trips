@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Large dataset files (download separately; see README)
+data/*.csv
+
+# macOS
+.DS_Store
