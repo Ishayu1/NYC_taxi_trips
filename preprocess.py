@@ -39,6 +39,22 @@ def add_manhattan_km(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def haversine_km(df: pd.DataFrame) -> pd.Series:
+    """Great-circle distance in km between pickup and dropoff coordinates."""
+    lat1 = np.radians(df["pickup_latitude"].to_numpy())
+    lat2 = np.radians(df["dropoff_latitude"].to_numpy())
+    dlat = np.radians((df["dropoff_latitude"] - df["pickup_latitude"]).to_numpy())
+    dlon = np.radians((df["dropoff_longitude"] - df["pickup_longitude"]).to_numpy())
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+    return pd.Series(6371.0 * 2 * np.arcsin(np.sqrt(a)), index=df.index)
+
+
+def add_haversine_km(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["haversine_km"] = haversine_km(out)
+    return out
+
+
 def _coords_in_nyc(df: pd.DataFrame) -> pd.Series:
     mask = pd.Series(True, index=df.index)
     for col in (
@@ -163,9 +179,17 @@ def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     if out["pickup_datetime"].dtype == object:
         out["pickup_datetime"] = pd.to_datetime(out["pickup_datetime"])
-    out["pickup_hour"] = out["pickup_datetime"].dt.hour
-    out["pickup_dow"] = out["pickup_datetime"].dt.dayofweek
+    hour = out["pickup_datetime"].dt.hour
+    dow = out["pickup_datetime"].dt.dayofweek
+    out["pickup_hour"] = hour
+    out["pickup_dow"] = dow
     out["pickup_month"] = out["pickup_datetime"].dt.month
+    out["is_weekend"] = (dow >= 5).astype(int)
+    # Weekday morning (7–9) and evening (16–19) rush windows
+    rush_hours = {7, 8, 9, 16, 17, 18, 19}
+    out["is_rush_hour"] = ((dow < 5) & hour.isin(rush_hours)).astype(int)
+    out["hour_sin"] = np.sin(2 * np.pi * hour / 24)
+    out["hour_cos"] = np.cos(2 * np.pi * hour / 24)
     return out
 
 
@@ -175,31 +199,71 @@ def add_log_target(df: pd.DataFrame, col: str = "trip_duration") -> pd.DataFrame
     return out
 
 
+METADATA_FEATURES = ["vendor_id", "passenger_count", "store_and_fwd_flag"]
+TIME_FEATURES = [
+    "pickup_hour",
+    "pickup_dow",
+    "pickup_month",
+    "is_weekend",
+    "is_rush_hour",
+    "hour_sin",
+    "hour_cos",
+]
+DISTANCE_FEATURES = ["manhattan_km", "haversine_km"]
+COORDINATE_FEATURES = [
+    "pickup_longitude",
+    "pickup_latitude",
+    "dropoff_longitude",
+    "dropoff_latitude",
+]
+FULL_FEATURES = METADATA_FEATURES + TIME_FEATURES + DISTANCE_FEATURES + COORDINATE_FEATURES
+
+FEATURE_GROUPS: dict[str, list[str]] = {
+    "metadata_only": METADATA_FEATURES,
+    "time_only": TIME_FEATURES,
+    "distance_only": DISTANCE_FEATURES,
+    "coordinates_only": COORDINATE_FEATURES,
+    "distance_time": DISTANCE_FEATURES + TIME_FEATURES,
+    "distance_coordinates": DISTANCE_FEATURES + COORDINATE_FEATURES,
+    "full": FULL_FEATURES,
+}
+
+
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Pre-trip feature matrix for tabular baselines.
+    Pre-trip feature matrix for tabular models.
 
-    Uses distance, time-of-day, day-of-week, month, passenger count, vendor,
-    and store_and_fwd_flag (no dropoff_datetime / trip_duration).
+    All columns are known at pickup time (no dropoff_datetime, trip_duration, or speed).
     """
-    work = add_time_features(add_manhattan_km(df))
+    work = add_time_features(add_haversine_km(add_manhattan_km(df)))
     fwd = work["store_and_fwd_flag"].map({"N": 0, "Y": 1}).fillna(0).astype(int)
-    return pd.DataFrame(
-        {
-            "manhattan_km": work["manhattan_km"],
-            "pickup_hour": work["pickup_hour"],
-            "pickup_dow": work["pickup_dow"],
-            "pickup_month": work["pickup_month"],
-            "passenger_count": work["passenger_count"],
-            "vendor_id": work["vendor_id"],
-            "store_and_fwd_flag": fwd,
-            "pickup_longitude": work["pickup_longitude"],
-            "pickup_latitude": work["pickup_latitude"],
-            "dropoff_longitude": work["dropoff_longitude"],
-            "dropoff_latitude": work["dropoff_latitude"],
-        },
-        index=work.index,
-    )
+    features = {
+        "manhattan_km": work["manhattan_km"],
+        "haversine_km": work["haversine_km"],
+        "pickup_hour": work["pickup_hour"],
+        "pickup_dow": work["pickup_dow"],
+        "pickup_month": work["pickup_month"],
+        "is_weekend": work["is_weekend"],
+        "is_rush_hour": work["is_rush_hour"],
+        "hour_sin": work["hour_sin"],
+        "hour_cos": work["hour_cos"],
+        "passenger_count": work["passenger_count"],
+        "vendor_id": work["vendor_id"],
+        "store_and_fwd_flag": fwd,
+        "pickup_longitude": work["pickup_longitude"],
+        "pickup_latitude": work["pickup_latitude"],
+        "dropoff_longitude": work["dropoff_longitude"],
+        "dropoff_latitude": work["dropoff_latitude"],
+    }
+    return pd.DataFrame(features, index=work.index)[FULL_FEATURES]
+
+
+def select_features(X: pd.DataFrame, group: str) -> pd.DataFrame:
+    """Return a feature subset for ablation experiments."""
+    if group not in FEATURE_GROUPS:
+        raise ValueError(f"Unknown feature group {group!r}; choose from {list(FEATURE_GROUPS)}")
+    cols = FEATURE_GROUPS[group]
+    return X[cols]
 
 
 def train_val_split_by_date(
