@@ -13,7 +13,10 @@ NYC_taxi_trips/
 ├── data/
 │   ├── train.csv
 │   └── test.csv
-├── EDA.ipynb
+├── EDA.ipynb          # exploratory analysis only
+├── preprocess.py    # cleaning, features, time-based split
+├── modeling.ipynb     # baselines and (later) tuned models
+├── requirements.txt
 └── README.md
 ```
 
@@ -21,3 +24,14 @@ NYC_taxi_trips/
 - **`data/test.csv`** — optional for EDA; keep it in the same folder if you use it for modeling or submission
 
 Paths are relative to the project root, so run Jupyter from this directory (or open the notebook with the workspace set to the repo root).
+
+## Modeling
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+jupyter notebook modeling.ipynb
+```
+
+Cleaning and splits live in `preprocess.py` (same rules as `EDA.ipynb`). Validation uses pickups on or after **2016-06-13** to mimic late-June test data.
